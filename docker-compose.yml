@@ -1,0 +1,112 @@
+name: deal-hunter
+
+x-backend-env: &backend-env
+  env_file: .env
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dealhunter}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-dealhunter}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dealhunter}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Development mail catcher: every email the app sends lands here instead of a real inbox.
+  # Web UI: http://localhost:8025   (SMTP_HOST=mailpit, SMTP_PORT=1025, SMTP_SECURITY=none)
+  mailpit:
+    image: axllent/mailpit:v1.21
+    ports:
+      - "127.0.0.1:8025:8025"
+
+  backend:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/backend.Dockerfile
+    <<: *backend-env
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  # Run the full test suite (incl. integration tests on a throwaway `<db>_test` database):
+  #   docker compose --profile test run --rm backend-tests
+  backend-tests:
+    profiles: ["test"]
+    build:
+      context: .
+      dockerfile: infrastructure/docker/backend.Dockerfile
+      args:
+        INSTALL_DEV: "true"
+    <<: *backend-env
+    volumes:
+      - ./tests:/srv/tests:ro
+      - ./mcp-server:/srv/mcp-server:ro
+    command: pytest -q
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  celery-worker:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/backend.Dockerfile
+    <<: *backend-env
+    working_dir: /srv/workers
+    command: celery -A dh_workers.celery_app.celery_app worker --loglevel=INFO
+    depends_on:
+      redis: { condition: service_healthy }
+
+  celery-beat:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/backend.Dockerfile
+    <<: *backend-env
+    working_dir: /tmp
+    command: celery -A dh_workers.celery_app.celery_app beat --loglevel=INFO --schedule=/tmp/celerybeat-schedule
+    depends_on:
+      redis: { condition: service_healthy }
+
+  # MCP server over streamable HTTP, reachable only inside the compose network (the port is NOT published).
+  # For a local stdio client instead:  docker compose run --rm -i mcp-server python -m dh_mcp.server
+  mcp-server:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/mcp.Dockerfile
+    <<: *backend-env
+    command: python -m dh_mcp.server --transport http
+    environment:
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "8765"
+    depends_on:
+      - backend
+
+  frontend:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/frontend.Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    <<: *backend-env
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:

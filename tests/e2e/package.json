@@ -1,0 +1,16 @@
+{
+  "name": "deal-hunter-e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "install-browser": "playwright install chromium",
+    "test": "node e2e.mjs",
+    "test:responsive": "node responsive.mjs",
+    "test:admin": "node admin-assistant.mjs",
+    "screenshots": "node screenshots.mjs"
+  },
+  "dependencies": {
+    "@axe-core/playwright": "^4.10.0",
+    "playwright": "^1.49.0"
+  }
+}

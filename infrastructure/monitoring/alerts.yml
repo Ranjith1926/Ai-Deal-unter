@@ -1,0 +1,69 @@
+groups:
+  - name: deal-hunter-availability
+    rules:
+      - alert: ApiDown
+        expr: up{job="deal-hunter-api"} == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "The Deal Hunter API is not answering scrapes"
+          runbook: "docs/DEPLOYMENT.md#troubleshooting"
+
+      - alert: HighServerErrorRate
+        expr: |
+          sum(rate(dh_http_requests_total{status=~"5.."}[5m]))
+            / clamp_min(sum(rate(dh_http_requests_total[5m])), 1) > 0.02
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "More than 2% of API requests are failing with 5xx"
+
+      - alert: SlowRequests
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le) (rate(dh_http_request_duration_seconds_bucket{route!~"/api/assistant.*"}[5m]))) > 0.75
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "p95 API latency has been above 750 ms for 10 minutes (the load-test budget is 500 ms)"
+
+      - alert: RequestBacklog
+        expr: dh_http_requests_in_flight > 80
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "Many requests are queued in the API; consider raising WEB_CONCURRENCY"
+
+  - name: deal-hunter-data
+    rules:
+      # A provider that is switched on but has not synced successfully recently means prices are going stale,
+      # and stale prices would otherwise be shown as current deals.
+      - alert: ProviderStale
+        expr: |
+          dh_provider_enabled == 1
+            and (dh_provider_last_success_age_seconds > 7200 or dh_provider_last_success_age_seconds < 0)
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "Provider {{ $labels.provider }} has no successful sync in over 2 hours"
+
+      - alert: ProviderJobsFailing
+        expr: dh_provider_failed_jobs_24h > 10
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: "Provider {{ $labels.provider }} had {{ $value }} failed jobs in 24h"
+
+      - alert: CatalogueEmpty
+        expr: dh_products_active == 0
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: "No products are visible on the site"
+
+      - alert: NoDealEventsDetected
+        expr: sum(dh_deal_events_24h) == 0 and dh_products_active > 0
+        for: 6h
+        labels: { severity: info }
+        annotations:
+          summary: "No deal events detected in 24h; check that scoring and price collection are running"

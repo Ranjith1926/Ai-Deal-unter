@@ -1,0 +1,19 @@
+# Prometheus scrape config for the production stack (see docker-compose.monitoring.yml).
+# The API serves /metrics only on the private network and only with the METRICS_TOKEN bearer token.
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  - job_name: deal-hunter-api
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/metrics_token   # mounted from a secret file, never inlined here
+    static_configs:
+      # With WEB_CONCURRENCY > 1 each scrape reaches one worker; counters are per process, so always
+      # use rate()/increase() over a window (alerts.yml does) rather than reading raw values.
+      - targets: ["backend:8000"]
